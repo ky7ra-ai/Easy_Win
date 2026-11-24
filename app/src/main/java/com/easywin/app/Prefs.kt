@@ -10,8 +10,12 @@ class Prefs(ctx: Context) {
     private fun int(k: String, d: Int): Int = sp.getInt(k, d)
     private fun putInt(k: String, v: Int) = sp.edit().putInt(k, v).apply()
 
+    /** "gemini_app" (tanpa API, lewat Shizuku) atau "gemini_api" (pakai API key). */
     var provider: String
-        get() = str("provider", "gemini")
+        get() {
+            val v = str("provider", "gemini_app")
+            return if (v == "gemini") "gemini_api" else v
+        }
         set(v) = putStr("provider", v)
 
     var geminiKey: String

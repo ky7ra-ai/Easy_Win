@@ -14,6 +14,16 @@ dan hasilnya bisa disimpan sebagai memori (materi, kisi-kisi, catatan).
   dan membandingkannya dengan KKM yang kamu atur.
 - **Penyedia AI**: Gemini (ada tier gratis) atau Claude. Model bisa diganti di pengaturan.
 
+## Mode jawaban
+
+- **Aplikasi Gemini + Shizuku (tanpa API, default)**: screenshot diambil lewat Shizuku, dibagikan ke aplikasi
+  Gemini di HP, tombol Kirim ditekan otomatis bila perlu, lalu teks jawabannya dibaca dari layar aplikasi
+  Gemini dan ditampilkan di panel. Ini mengotomasi antarmuka aplikasi Gemini, jadi bisa rusak bila
+  tampilannya berubah. Hanya teks yang terlihat di layar Gemini yang terbaca (jawaban sangat panjang bisa terpotong).
+- **Gemini API (opsional)**: lebih stabil dan hasilnya terstruktur. Butuh API key gratis dari AI Studio.
+
+Persyaratan mode tanpa API: aplikasi Shizuku berjalan + izin diberikan, aplikasi Gemini terpasang dan sudah login.
+
 ## Mengunduh APK
 
 Setiap push ke `main` membangun APK lewat GitHub Actions.

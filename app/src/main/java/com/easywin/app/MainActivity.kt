@@ -24,12 +24,14 @@ class MainActivity : Activity() {
 
     private lateinit var prefs: Prefs
     private lateinit var spProvider: Spinner
+    private lateinit var apiBox: LinearLayout
     private lateinit var etKey: EditText
     private lateinit var etModel: EditText
     private lateinit var etKkm: EditText
     private lateinit var tvScore: TextView
+    private lateinit var tvShizuku: TextView
 
-    private val providers = listOf("gemini", "claude")
+    private val providers = listOf("gemini_app", "gemini_api")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,6 +45,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         updateScore()
+        updateShizukuStatus()
     }
 
     private fun label(s: String, size: Float = 14f, bold: Boolean = false): TextView {
@@ -62,15 +65,6 @@ class MainActivity : Activity() {
         return b
     }
 
-    private fun edit(hint: String, secret: Boolean = false, number: Boolean = false): EditText {
-        val e = EditText(this)
-        e.hint = hint
-        e.setSingleLine(true)
-        if (secret) e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        if (number) e.inputType = InputType.TYPE_CLASS_NUMBER
-        return e
-    }
-
     private fun buildUi() {
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
@@ -82,33 +76,51 @@ class MainActivity : Activity() {
         root.addView(label("Easy Win", 24f, true))
         root.addView(
             label(
-                "Ketuk ikon melayang di atas aplikasi apa pun. Layar dibaca, soal dijawab AI " +
+                "Ketuk ikon melayang di atas aplikasi apa pun. Layar dibaca, soal dijawab Gemini " +
                     "lengkap dengan penjelasan, dan hasilnya bisa disimpan sebagai memori."
             )
         )
 
-        root.addView(label("1. Penyedia AI", 16f, true))
+        root.addView(label("1. Sumber jawaban", 16f, true))
         spProvider = Spinner(this)
         spProvider.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
-            listOf("Gemini (ada tier gratis)", "Claude (Anthropic)")
+            listOf("Aplikasi Gemini + Shizuku (tanpa API)", "Gemini API (pakai API key)")
         )
         root.addView(spProvider)
 
-        etKey = edit("API key", secret = true)
-        etModel = edit("Nama model")
-        etKkm = edit("KKM (0-100)", number = true)
-        root.addView(etKey)
-        root.addView(etModel)
+        root.addView(label("2. Shizuku", 16f, true))
+        tvShizuku = label("", 13f)
+        root.addView(tvShizuku)
         root.addView(
             label(
-                "Gemini: buat API key gratis di aistudio.google.com/apikey. " +
-                    "Claude: console.anthropic.com. Key hanya disimpan di HP ini.",
+                "Pasang aplikasi Shizuku, jalankan lewat Debugging nirkabel (Android 11+) atau adb, " +
+                    "lalu tekan tombol di bawah untuk memberi izin. Shizuku dipakai untuk screenshot " +
+                    "tanpa dialog izin dan untuk mengendalikan aplikasi Gemini.",
                 12f
             )
         )
+        root.addView(btn("Beri izin Shizuku ke Easy Win") { requestShizuku() })
 
-        root.addView(label("2. Nilai KKM untuk akurasi AI", 16f, true))
+        apiBox = LinearLayout(this)
+        apiBox.orientation = LinearLayout.VERTICAL
+        etKey = EditText(this)
+        etKey.hint = "Gemini API key"
+        etKey.setSingleLine(true)
+        etKey.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        etModel = EditText(this)
+        etModel.hint = "Nama model"
+        etModel.setSingleLine(true)
+        apiBox.addView(label("Pengaturan Gemini API (hanya untuk mode API)", 14f, true))
+        apiBox.addView(etKey)
+        apiBox.addView(etModel)
+        apiBox.addView(label("Key gratis: aistudio.google.com/apikey. Disimpan hanya di HP ini.", 12f))
+        root.addView(apiBox)
+
+        root.addView(label("3. Nilai KKM untuk akurasi AI", 16f, true))
+        etKkm = EditText(this)
+        etKkm.hint = "KKM (0-100)"
+        etKkm.inputType = InputType.TYPE_CLASS_NUMBER
         root.addView(etKkm)
         tvScore = label("", 13f)
         root.addView(tvScore)
@@ -117,20 +129,19 @@ class MainActivity : Activity() {
             prefs.total = 0
             updateScore()
         })
-
         root.addView(btn("Simpan pengaturan") {
             saveFields()
             Toast.makeText(this, "Pengaturan tersimpan", Toast.LENGTH_SHORT).show()
         })
 
-        root.addView(label("3. Jalankan", 16f, true))
+        root.addView(label("4. Jalankan", 16f, true))
         root.addView(btn("Izinkan tampil di atas aplikasi lain") { openOverlaySettings() })
         root.addView(btn("Mulai floating window") { start() })
         root.addView(btn("Hentikan floating window") {
             startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_STOP))
         })
 
-        root.addView(label("4. Memori", 16f, true))
+        root.addView(label("5. Memori", 16f, true))
         root.addView(btn("Kelola memori (materi & kisi-kisi)") {
             startActivity(Intent(this, MemoryActivity::class.java))
         })
@@ -139,36 +150,22 @@ class MainActivity : Activity() {
         spProvider.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 prefs.provider = providers[pos]
-                loadFields()
+                apiBox.visibility = if (pos == 1) View.VISIBLE else View.GONE
             }
 
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
-        loadFields()
+        apiBox.visibility = if (prefs.provider == "gemini_api") View.VISIBLE else View.GONE
+        etKey.setText(prefs.geminiKey)
+        etModel.setText(prefs.geminiModel)
         etKkm.setText(prefs.kkm.toString())
         updateScore()
-    }
-
-    private fun loadFields() {
-        if (prefs.provider == "claude") {
-            etKey.setText(prefs.claudeKey)
-            etModel.setText(prefs.claudeModel)
-        } else {
-            etKey.setText(prefs.geminiKey)
-            etModel.setText(prefs.geminiModel)
-        }
+        updateShizukuStatus()
     }
 
     private fun saveFields() {
-        val key = etKey.text.toString().trim()
-        val model = etModel.text.toString().trim()
-        if (prefs.provider == "claude") {
-            prefs.claudeKey = key
-            prefs.claudeModel = model.ifEmpty { "claude-sonnet-5-5" }
-        } else {
-            prefs.geminiKey = key
-            prefs.geminiModel = model.ifEmpty { "gemini-2.5-flash" }
-        }
+        prefs.geminiKey = etKey.text.toString().trim()
+        prefs.geminiModel = etModel.text.toString().trim().ifEmpty { "gemini-2.5-flash" }
         prefs.kkm = (etKkm.text.toString().toIntOrNull() ?: 75).coerceIn(0, 100)
         updateScore()
     }
@@ -185,10 +182,47 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun updateShizukuStatus() {
+        val geminiPkg = GeminiAppBridge.findPackage(this)
+        val shizuku = when {
+            !ShizukuHelper.isRunning() -> "Shizuku: belum berjalan"
+            !ShizukuHelper.hasPermission() -> "Shizuku: berjalan, izin belum diberikan"
+            else -> "Shizuku: siap ✔"
+        }
+        val gemini = if (geminiPkg != null) "Aplikasi Gemini: terpasang ✔" else "Aplikasi Gemini: tidak ditemukan"
+        tvShizuku.text = shizuku + "\n" + gemini
+    }
+
+    private fun requestShizuku() {
+        if (!ShizukuHelper.isRunning()) {
+            Toast.makeText(this, "Shizuku belum berjalan. Buka aplikasi Shizuku dan jalankan dulu.", Toast.LENGTH_LONG).show()
+            val i = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+            if (i != null) startActivity(i)
+            return
+        }
+        if (ShizukuHelper.hasPermission()) {
+            Toast.makeText(this, "Izin Shizuku sudah diberikan", Toast.LENGTH_SHORT).show()
+        } else {
+            ShizukuHelper.requestPermission(200)
+        }
+        updateShizukuStatus()
+    }
+
     private fun openOverlaySettings() {
         startActivity(
             Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName))
         )
+    }
+
+    private fun startOverlay(resultCode: Int, data: Intent?) {
+        val i = Intent(this, OverlayService::class.java)
+        if (data != null) {
+            i.putExtra("code", resultCode)
+            i.putExtra("data", data)
+        }
+        startForegroundService(i)
+        Toast.makeText(this, "Aktif. Buka halaman soal lalu ketuk ikon AI.", Toast.LENGTH_LONG).show()
+        moveTaskToBack(true)
     }
 
     private fun start() {
@@ -198,25 +232,37 @@ class MainActivity : Activity() {
             openOverlaySettings()
             return
         }
+        val shizukuOk = ShizukuHelper.hasPermission()
+        if (prefs.provider == "gemini_app") {
+            if (!shizukuOk) {
+                Toast.makeText(this, "Aktifkan Shizuku dan beri izin dulu", Toast.LENGTH_LONG).show()
+                return
+            }
+            if (GeminiAppBridge.findPackage(this) == null) {
+                Toast.makeText(this, "Aplikasi Gemini belum terpasang", Toast.LENGTH_LONG).show()
+                return
+            }
+            startOverlay(0, null)
+            return
+        }
         if (prefs.apiKey().isBlank()) {
             Toast.makeText(this, "Isi API key dulu", Toast.LENGTH_LONG).show()
             return
         }
-        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        @Suppress("DEPRECATION")
-        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+        if (shizukuOk) {
+            startOverlay(0, null)
+        } else {
+            val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            @Suppress("DEPRECATION")
+            startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+        }
     }
 
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_CAPTURE && resultCode == RESULT_OK && data != null) {
-            val i = Intent(this, OverlayService::class.java)
-            i.putExtra("code", resultCode)
-            i.putExtra("data", data)
-            startForegroundService(i)
-            Toast.makeText(this, "Aktif. Buka halaman soal lalu ketuk ikon AI.", Toast.LENGTH_LONG).show()
-            moveTaskToBack(true)
+            startOverlay(resultCode, data)
         } else if (requestCode == REQ_CAPTURE) {
             Toast.makeText(this, "Izin tangkap layar ditolak", Toast.LENGTH_SHORT).show()
         }

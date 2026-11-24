@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -90,39 +91,44 @@ class OverlayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (projection != null) return START_NOT_STICKY
+        if (bubble != null) return START_NOT_STICKY
 
         val code = intent?.getIntExtra("code", 0) ?: 0
         @Suppress("DEPRECATION")
         val data = intent?.getParcelableExtra<Intent>("data")
-        if (data == null) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
 
-        startAsForeground()
+        startAsForeground(data != null)
 
-        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val mp = mpm.getMediaProjection(code, data)
-        projection = mp
         val thread = HandlerThread("easywin-capture")
         thread.start()
         capThread = thread
         capHandler = Handler(thread.looper)
-        mp.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                main.post { stopSelf() }
-            }
-        }, main)
+
+        if (data != null) {
+            val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            val mp = mpm.getMediaProjection(code, data)
+            projection = mp
+            mp.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    main.post { stopSelf() }
+                }
+            }, main)
+        } else if (!ShizukuHelper.hasPermission()) {
+            toast("Shizuku belum aktif atau izin belum diberikan")
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         buildBubble()
         buildPanel()
-        val size = screenSize()
-        ensureDisplay(size.first, size.second)
+        if (projection != null) {
+            val size = screenSize()
+            ensureDisplay(size.first, size.second)
+        }
         return START_NOT_STICKY
     }
 
-    private fun startAsForeground() {
+    private fun startAsForeground(withProjection: Boolean) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Easy Win", NotificationManager.IMPORTANCE_LOW)
@@ -137,7 +143,12 @@ class OverlayService : Service() {
             .addAction(android.R.drawable.ic_delete, "Hentikan", stopPi)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            val type = if (withProjection) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
+            startForeground(1, n, type)
         } else {
             startForeground(1, n)
         }
@@ -447,13 +458,19 @@ class OverlayService : Service() {
 
     private fun analyze() {
         if (busy) return
+        if (prefs.provider == "gemini_app") {
+            analyzeViaGeminiApp()
+            return
+        }
         if (prefs.apiKey().isBlank()) {
             toast("API key belum diisi di aplikasi")
             return
         }
         busy = true
-        val size = screenSize()
-        ensureDisplay(size.first, size.second)
+        if (projection != null) {
+            val size = screenSize()
+            ensureDisplay(size.first, size.second)
+        }
         bubble?.visibility = View.INVISIBLE
         hidePanel()
         main.postDelayed({
@@ -558,7 +575,62 @@ class OverlayService : Service() {
         return Bitmap.createBitmap(wide, 0, 0, img.width, img.height)
     }
 
+    private fun appPrompt(): String {
+        val base = "Jawab semua soal yang ada di gambar ini dengan tepat. " +
+            "Untuk setiap soal tulis: nomor soal, jawaban final, lalu penjelasan singkat. " +
+            "Jika yang terlihat adalah materi atau kisi-kisi, ringkas poin pentingnya. " +
+            "Gunakan bahasa yang sama dengan gambar."
+        val mem = store.contextText(3000)
+        return if (mem.isBlank()) base else base + "\n\nIngatan yang mungkin relevan:\n" + mem
+    }
+
+    private fun analyzeViaGeminiApp() {
+        if (!ShizukuHelper.hasPermission()) {
+            toast("Mode ini butuh Shizuku aktif dan izin diberikan")
+            return
+        }
+        busy = true
+        bubble?.visibility = View.INVISIBLE
+        hidePanel()
+        toast("Meneruskan ke aplikasi Gemini…")
+        main.postDelayed({
+            Thread {
+                val shot = ShizukuHelper.exec("screencap -p")
+                val res = if (shot.code != 0 || shot.bytes.size < 1000) {
+                    AiClient.Result(false, "Gagal screenshot via Shizuku: " + shot.err.take(200))
+                } else {
+                    GeminiAppBridge.run(this@OverlayService, shot.bytes, appPrompt())
+                }
+                Thread.sleep(700)
+                main.post {
+                    bubble?.visibility = View.VISIBLE
+                    showPanel()
+                    clearResults()
+                    updateScore()
+                    if (!res.ok) {
+                        setStatus("Gagal: " + res.text)
+                    } else {
+                        setStatus("Jawaban dari Gemini")
+                        lastResult = JSONObject()
+                            .put("memory_title", "Jawaban Gemini")
+                            .put("memory_note", res.text)
+                        addLine(resultBox, res.text, 13f, "#222222")
+                    }
+                    busy = false
+                }
+            }.start()
+        }, 450)
+    }
+
+    private fun shizukuScreenBase64(): String? {
+        val shot = ShizukuHelper.exec("screencap -p")
+        if (shot.code != 0 || shot.bytes.size < 1000) return null
+        val bmp = BitmapFactory.decodeByteArray(shot.bytes, 0, shot.bytes.size) ?: return null
+        return encode(bmp)
+    }
+
     private fun grabScreenBase64(): String? {
+        if (projection == null) return shizukuScreenBase64()
         for (attempt in 0 until 15) {
             val bmp = synchronized(lock) {
                 val img = latest
