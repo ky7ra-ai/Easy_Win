@@ -1,0 +1,14 @@
+name: Probe versions
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Versions
+        run: |
+          echo "== litertlm"; curl -s https://dl.google.com/dl/android/maven2/com/google/ai/edge/litertlm/litertlm-android/maven-metadata.xml | grep -E "<version>|<latest>|<release>" | tr -d ' \n'; echo
+          echo "== AGP"; curl -s https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/maven-metadata.xml | grep -E "<version>" | tail -12 | tr -d ' \n'; echo
+          echo "== KGP"; curl -s https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-gradle-plugin/maven-metadata.xml | grep -E "<latest>|<release>" | tr -d ' \n'; echo
+          echo "== Gradle"; curl -s https://services.gradle.org/versions/current | grep -E '"version"'
+          echo "== java"; java -version 2>&1 | head -1
