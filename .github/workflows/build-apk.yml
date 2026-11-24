@@ -1,0 +1,43 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EasyWin-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish to Releases (tag "latest")
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk EasyWin.apk
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest EasyWin.apk \
+            --title "Easy Win (build terbaru)" \
+            --notes "APK debug dari commit ${{ github.sha }}" \
+            --target "${{ github.sha }}"
