@@ -76,6 +76,7 @@ class OverlayService : Service() {
     private var lastResult: JSONObject? = null
     private var rated = false
     private var busy = false
+    private var streamView: TextView? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -323,6 +324,7 @@ class OverlayService : Service() {
 
     private fun clearResults() {
         resultBox.removeAllViews()
+        streamView = null
         lastResult = null
         rated = false
     }
@@ -458,6 +460,10 @@ class OverlayService : Service() {
 
     private fun analyze() {
         if (busy) return
+        if (prefs.provider == "local") {
+            analyzeLocal()
+            return
+        }
         if (prefs.provider == "gemini_app") {
             analyzeViaGeminiApp()
             return
@@ -575,6 +581,93 @@ class OverlayService : Service() {
         return Bitmap.createBitmap(wide, 0, 0, img.width, img.height)
     }
 
+    private fun showStream(text: String) {
+        var tv = streamView
+        if (tv == null) {
+            tv = TextView(ui)
+            tv.textSize = 13f
+            tv.setTextColor(Color.parseColor("#222222"))
+            tv.setPadding(0, dp(4), 0, dp(4))
+            resultBox.addView(tv)
+            streamView = tv
+        }
+        tv.text = text
+    }
+
+    private fun captureBitmap(): Bitmap? {
+        if (projection == null) {
+            val shot = ShizukuHelper.exec("screencap -p")
+            if (shot.code != 0 || shot.bytes.size < 1000) return null
+            return BitmapFactory.decodeByteArray(shot.bytes, 0, shot.bytes.size)
+        }
+        for (attempt in 0 until 15) {
+            val bmp = synchronized(lock) {
+                val img = latest
+                if (img != null) toBitmap(img) else null
+            }
+            if (bmp != null) return bmp
+            Thread.sleep(100)
+        }
+        return null
+    }
+
+    private fun analyzeLocal() {
+        if (!LocalBrain.modelFile(this).exists()) {
+            toast("Model otak lokal belum dipasang. Buka aplikasi lalu pasang model.")
+            return
+        }
+        busy = true
+        if (projection != null) {
+            val size = screenSize()
+            ensureDisplay(size.first, size.second)
+        }
+        bubble?.visibility = View.INVISIBLE
+        hidePanel()
+        main.postDelayed({
+            Thread {
+                val bmp = try {
+                    captureBitmap()
+                } catch (e: Exception) {
+                    null
+                }
+                main.post {
+                    bubble?.visibility = View.VISIBLE
+                    showPanel()
+                    clearResults()
+                    updateScore()
+                    if (bmp == null) {
+                        setStatus("Gagal menangkap layar. Coba lagi.")
+                        busy = false
+                    } else {
+                        setStatus("Membaca layar (OCR)…")
+                        Thread {
+                            val text = LocalBrain.ocr(bmp)
+                            main.post {
+                                setStatus("Otak lokal berpikir… (memuat model pertama kali bisa lama)")
+                            }
+                            val res = LocalBrain.answer(
+                                this@OverlayService, bmp, text, store.contextText(1500),
+                                prefs.useGpu, prefs.modelName
+                            ) { partial -> main.post { showStream(partial) } }
+                            main.post {
+                                if (!res.ok) {
+                                    setStatus("Gagal: " + res.text)
+                                } else {
+                                    setStatus("Jawaban otak lokal")
+                                    showStream(res.text)
+                                    lastResult = JSONObject()
+                                        .put("memory_title", "Jawaban otak lokal")
+                                        .put("memory_note", res.text)
+                                }
+                                busy = false
+                            }
+                        }.start()
+                    }
+                }
+            }.start()
+        }, 450)
+    }
+
     private fun appPrompt(): String {
         val base = "Jawab semua soal yang ada di gambar ini dengan tepat. " +
             "Untuk setiap soal tulis: nomor soal, jawaban final, lalu penjelasan singkat. " +
@@ -675,6 +768,7 @@ class OverlayService : Service() {
         } catch (e: Exception) {
         }
         capThread?.quitSafely()
+        LocalBrain.release()
     }
 
     companion object {

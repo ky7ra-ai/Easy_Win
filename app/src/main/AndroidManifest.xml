@@ -18,8 +18,16 @@
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="Easy Win"
+        android:largeHeap="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="false">
+
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
 
         <activity
             android:name=".MainActivity"

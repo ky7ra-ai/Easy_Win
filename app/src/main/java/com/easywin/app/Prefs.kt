@@ -13,7 +13,7 @@ class Prefs(ctx: Context) {
     /** "gemini_app" (tanpa API, lewat Shizuku) atau "gemini_api" (pakai API key). */
     var provider: String
         get() {
-            val v = str("provider", "gemini_app")
+            val v = str("provider", "local")
             return if (v == "gemini") "gemini_api" else v
         }
         set(v) = putStr("provider", v)
@@ -33,6 +33,23 @@ class Prefs(ctx: Context) {
     var claudeModel: String
         get() = str("claudeModel", "claude-sonnet-5-5")
         set(v) = putStr("claudeModel", v)
+
+    /** Nama file model otak lokal yang terpasang (dipakai untuk mendeteksi model visi). */
+    var modelName: String
+        get() = str("modelName", "")
+        set(v) = putStr("modelName", v)
+
+    var modelUrl: String
+        get() = str("modelUrl", "")
+        set(v) = putStr("modelUrl", v)
+
+    var hfToken: String
+        get() = str("hfToken", "")
+        set(v) = putStr("hfToken", v)
+
+    var useGpu: Boolean
+        get() = sp.getBoolean("useGpu", false)
+        set(v) = sp.edit().putBoolean("useGpu", v).apply()
 
     /** Nilai KKM (0-100) sebagai ambang akurasi AI. */
     var kkm: Int

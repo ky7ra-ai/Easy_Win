@@ -7,18 +7,24 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.InputType
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : Activity() {
 
@@ -28,10 +34,16 @@ class MainActivity : Activity() {
     private lateinit var etKey: EditText
     private lateinit var etModel: EditText
     private lateinit var etKkm: EditText
+    private lateinit var etModelUrl: EditText
+    private lateinit var etHfToken: EditText
+    private lateinit var cbGpu: CheckBox
     private lateinit var tvScore: TextView
     private lateinit var tvShizuku: TextView
+    private lateinit var tvBrain: TextView
+    private val ui = Handler(Looper.getMainLooper())
+    private var modelBusy = false
 
-    private val providers = listOf("gemini_app", "gemini_api")
+    private val providers = listOf("local", "gemini_app", "gemini_api")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +58,7 @@ class MainActivity : Activity() {
         super.onResume()
         updateScore()
         updateShizukuStatus()
+        updateBrainStatus()
     }
 
     private fun label(s: String, size: Float = 14f, bold: Boolean = false): TextView {
@@ -76,7 +89,7 @@ class MainActivity : Activity() {
         root.addView(label("Easy Win", 24f, true))
         root.addView(
             label(
-                "Ketuk ikon melayang di atas aplikasi apa pun. Layar dibaca, soal dijawab Gemini " +
+                "Ketuk ikon melayang di atas aplikasi apa pun. Layar dibaca, soal dijawab " +
                     "lengkap dengan penjelasan, dan hasilnya bisa disimpan sebagai memori."
             )
         )
@@ -85,18 +98,50 @@ class MainActivity : Activity() {
         spProvider = Spinner(this)
         spProvider.adapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_dropdown_item,
-            listOf("Aplikasi Gemini + Shizuku (tanpa API)", "Gemini API (pakai API key)")
+            listOf(
+                "Otak lokal (model di HP, tanpa API & internet)",
+                "Aplikasi Gemini + Shizuku (tanpa API)",
+                "Gemini API (pakai API key)"
+            )
         )
         root.addView(spProvider)
 
-        root.addView(label("2. Shizuku", 16f, true))
+        // --- Otak lokal
+        root.addView(label("2. Otak lokal", 16f, true))
+        tvBrain = label("", 13f)
+        root.addView(tvBrain)
+        root.addView(
+            label(
+                "Model berjalan penuh di HP, jadi butuh RAM besar. Saran: Gemma 3n E2B (.litertlm, bisa " +
+                    "melihat gambar, butuh sekitar 8 GB RAM) atau Gemma 3 1B IT (ringan, hanya teks). " +
+                    "Cari di Hugging Face: google/gemma-3n-E2B-it-litert-lm atau litert-community/Gemma3-1B-IT. " +
+                    "Model Gemma butuh login Hugging Face dan persetujuan lisensi.",
+                12f
+            )
+        )
+        etModelUrl = EditText(this)
+        etModelUrl.hint = "Link unduh langsung file .litertlm"
+        etModelUrl.setSingleLine(true)
+        root.addView(etModelUrl)
+        etHfToken = EditText(this)
+        etHfToken.hint = "Token Hugging Face (opsional, untuk model terkunci)"
+        etHfToken.setSingleLine(true)
+        etHfToken.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        root.addView(etHfToken)
+        root.addView(btn("Unduh model dari link") { downloadModel() })
+        root.addView(btn("Atau pilih file model dari HP (.litertlm)") { pickModel() })
+        cbGpu = CheckBox(this)
+        cbGpu.text = "Pakai GPU (lebih cepat, tapi tidak stabil di sebagian HP)"
+        root.addView(cbGpu)
+
+        // --- Shizuku (opsional)
+        root.addView(label("3. Shizuku (opsional)", 16f, true))
         tvShizuku = label("", 13f)
         root.addView(tvShizuku)
         root.addView(
             label(
-                "Pasang aplikasi Shizuku, jalankan lewat Debugging nirkabel (Android 11+) atau adb, " +
-                    "lalu tekan tombol di bawah untuk memberi izin. Shizuku dipakai untuk screenshot " +
-                    "tanpa dialog izin dan untuk mengendalikan aplikasi Gemini.",
+                "Dengan Shizuku, screenshot diambil tanpa dialog izin tangkap layar. " +
+                    "Wajib hanya untuk mode 'Aplikasi Gemini + Shizuku'.",
                 12f
             )
         )
@@ -117,7 +162,7 @@ class MainActivity : Activity() {
         apiBox.addView(label("Key gratis: aistudio.google.com/apikey. Disimpan hanya di HP ini.", 12f))
         root.addView(apiBox)
 
-        root.addView(label("3. Nilai KKM untuk akurasi AI", 16f, true))
+        root.addView(label("4. Nilai KKM untuk akurasi AI", 16f, true))
         etKkm = EditText(this)
         etKkm.hint = "KKM (0-100)"
         etKkm.inputType = InputType.TYPE_CLASS_NUMBER
@@ -134,14 +179,14 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Pengaturan tersimpan", Toast.LENGTH_SHORT).show()
         })
 
-        root.addView(label("4. Jalankan", 16f, true))
+        root.addView(label("5. Jalankan", 16f, true))
         root.addView(btn("Izinkan tampil di atas aplikasi lain") { openOverlaySettings() })
         root.addView(btn("Mulai floating window") { start() })
         root.addView(btn("Hentikan floating window") {
             startService(Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_STOP))
         })
 
-        root.addView(label("5. Memori", 16f, true))
+        root.addView(label("6. Memori", 16f, true))
         root.addView(btn("Kelola memori (materi & kisi-kisi)") {
             startActivity(Intent(this, MemoryActivity::class.java))
         })
@@ -150,7 +195,7 @@ class MainActivity : Activity() {
         spProvider.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 prefs.provider = providers[pos]
-                apiBox.visibility = if (pos == 1) View.VISIBLE else View.GONE
+                apiBox.visibility = if (pos == 2) View.VISIBLE else View.GONE
             }
 
             override fun onNothingSelected(p: AdapterView<*>?) {}
@@ -159,14 +204,21 @@ class MainActivity : Activity() {
         etKey.setText(prefs.geminiKey)
         etModel.setText(prefs.geminiModel)
         etKkm.setText(prefs.kkm.toString())
+        etModelUrl.setText(prefs.modelUrl)
+        etHfToken.setText(prefs.hfToken)
+        cbGpu.isChecked = prefs.useGpu
         updateScore()
         updateShizukuStatus()
+        updateBrainStatus()
     }
 
     private fun saveFields() {
         prefs.geminiKey = etKey.text.toString().trim()
         prefs.geminiModel = etModel.text.toString().trim().ifEmpty { "gemini-2.5-flash" }
         prefs.kkm = (etKkm.text.toString().toIntOrNull() ?: 75).coerceIn(0, 100)
+        prefs.modelUrl = etModelUrl.text.toString().trim()
+        prefs.hfToken = etHfToken.text.toString().trim()
+        prefs.useGpu = cbGpu.isChecked
         updateScore()
     }
 
@@ -191,6 +243,107 @@ class MainActivity : Activity() {
         }
         val gemini = if (geminiPkg != null) "Aplikasi Gemini: terpasang ✔" else "Aplikasi Gemini: tidak ditemukan"
         tvShizuku.text = shizuku + "\n" + gemini
+    }
+
+    private fun updateBrainStatus() {
+        val f = LocalBrain.modelFile(this)
+        tvBrain.text = if (f.exists()) {
+            val mb = f.length() / (1024 * 1024)
+            val vision = if (LocalBrain.isVision(prefs.modelName)) "bisa melihat gambar" else "teks saja (OCR)"
+            "Model terpasang ✔ " + prefs.modelName + " (" + mb + " MB, " + vision + ")"
+        } else {
+            "Model belum terpasang"
+        }
+    }
+
+    private fun setBrainStatus(s: String) {
+        ui.post { tvBrain.text = s }
+    }
+
+    private fun downloadModel() {
+        saveFields()
+        val url = prefs.modelUrl
+        if (url.isBlank()) {
+            Toast.makeText(this, "Isi link unduh dulu", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (modelBusy) return
+        modelBusy = true
+        val name = Uri.parse(url).lastPathSegment ?: "model.litertlm"
+        Toast.makeText(this, "Mengunduh… biarkan aplikasi tetap terbuka", Toast.LENGTH_LONG).show()
+        Thread {
+            val err = ModelDownloader.download(url, prefs.hfToken, LocalBrain.modelFile(this)) { done, total ->
+                val pct = if (total > 0) " (" + (done * 100 / total) + "%)" else ""
+                setBrainStatus("Mengunduh: " + (done / (1024 * 1024)) + " MB" + pct)
+            }
+            ui.post {
+                modelBusy = false
+                if (err == null) {
+                    prefs.modelName = name
+                    Toast.makeText(this, "Model terpasang", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "Gagal: " + err, Toast.LENGTH_LONG).show()
+                }
+                updateBrainStatus()
+            }
+        }.start()
+    }
+
+    private fun pickModel() {
+        if (modelBusy) return
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "*/*"
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, REQ_MODEL)
+    }
+
+    private fun importModel(uri: Uri) {
+        modelBusy = true
+        var name = "model.litertlm"
+        contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && c.moveToFirst()) name = c.getString(idx) ?: name
+        }
+        val finalName = name
+        Thread {
+            var err: String? = null
+            try {
+                val dest = LocalBrain.modelFile(this)
+                val tmp = File(dest.path + ".part")
+                contentResolver.openInputStream(uri)!!.use { ins ->
+                    FileOutputStream(tmp).use { out ->
+                        val buf = ByteArray(1 shl 20)
+                        var done = 0L
+                        var last = 0L
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            if (done - last >= (32L shl 20)) {
+                                last = done
+                                setBrainStatus("Menyalin model: " + (done / (1024 * 1024)) + " MB")
+                            }
+                        }
+                    }
+                }
+                if (dest.exists()) dest.delete()
+                if (!tmp.renameTo(dest)) err = "Gagal menyimpan file model"
+            } catch (e: Exception) {
+                err = e.message ?: e.toString()
+            }
+            ui.post {
+                modelBusy = false
+                if (err == null) {
+                    prefs.modelName = finalName
+                    Toast.makeText(this, "Model terpasang", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "Gagal: " + err, Toast.LENGTH_LONG).show()
+                }
+                updateBrainStatus()
+            }
+        }.start()
     }
 
     private fun requestShizuku() {
@@ -225,31 +378,8 @@ class MainActivity : Activity() {
         moveTaskToBack(true)
     }
 
-    private fun start() {
-        saveFields()
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Izinkan 'tampil di atas aplikasi lain' dulu", Toast.LENGTH_LONG).show()
-            openOverlaySettings()
-            return
-        }
-        val shizukuOk = ShizukuHelper.hasPermission()
-        if (prefs.provider == "gemini_app") {
-            if (!shizukuOk) {
-                Toast.makeText(this, "Aktifkan Shizuku dan beri izin dulu", Toast.LENGTH_LONG).show()
-                return
-            }
-            if (GeminiAppBridge.findPackage(this) == null) {
-                Toast.makeText(this, "Aplikasi Gemini belum terpasang", Toast.LENGTH_LONG).show()
-                return
-            }
-            startOverlay(0, null)
-            return
-        }
-        if (prefs.apiKey().isBlank()) {
-            Toast.makeText(this, "Isi API key dulu", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (shizukuOk) {
+    private fun captureThenStart() {
+        if (ShizukuHelper.hasPermission()) {
             startOverlay(0, null)
         } else {
             val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -258,17 +388,59 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun start() {
+        saveFields()
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Izinkan 'tampil di atas aplikasi lain' dulu", Toast.LENGTH_LONG).show()
+            openOverlaySettings()
+            return
+        }
+        when (prefs.provider) {
+            "local" -> {
+                if (!LocalBrain.modelFile(this).exists()) {
+                    Toast.makeText(this, "Pasang model otak lokal dulu", Toast.LENGTH_LONG).show()
+                    return
+                }
+                captureThenStart()
+            }
+            "gemini_app" -> {
+                if (!ShizukuHelper.hasPermission()) {
+                    Toast.makeText(this, "Aktifkan Shizuku dan beri izin dulu", Toast.LENGTH_LONG).show()
+                    return
+                }
+                if (GeminiAppBridge.findPackage(this) == null) {
+                    Toast.makeText(this, "Aplikasi Gemini belum terpasang", Toast.LENGTH_LONG).show()
+                    return
+                }
+                startOverlay(0, null)
+            }
+            else -> {
+                if (prefs.apiKey().isBlank()) {
+                    Toast.makeText(this, "Isi API key dulu", Toast.LENGTH_LONG).show()
+                    return
+                }
+                captureThenStart()
+            }
+        }
+    }
+
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_CAPTURE && resultCode == RESULT_OK && data != null) {
-            startOverlay(resultCode, data)
-        } else if (requestCode == REQ_CAPTURE) {
-            Toast.makeText(this, "Izin tangkap layar ditolak", Toast.LENGTH_SHORT).show()
+        if (requestCode == REQ_CAPTURE) {
+            if (resultCode == RESULT_OK && data != null) {
+                startOverlay(resultCode, data)
+            } else {
+                Toast.makeText(this, "Izin tangkap layar ditolak", Toast.LENGTH_SHORT).show()
+            }
+        } else if (requestCode == REQ_MODEL && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri != null) importModel(uri)
         }
     }
 
     companion object {
         private const val REQ_CAPTURE = 100
+        private const val REQ_MODEL = 101
     }
 }

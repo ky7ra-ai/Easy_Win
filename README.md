@@ -16,6 +16,11 @@ dan hasilnya bisa disimpan sebagai memori (materi, kisi-kisi, catatan).
 
 ## Mode jawaban
 
+- **Otak lokal (default)**: model AI (LiteRT-LM) berjalan penuh di HP, tanpa API dan tanpa internet.
+  Teks layar dibaca dengan OCR on-device; model bervisi seperti Gemma 3n juga menerima gambar layar.
+  Pasang model sekali lewat tombol "Unduh model dari link" (boleh pakai token Hugging Face) atau
+  "Pilih file model" (unduh dulu `.litertlm` lewat browser). Butuh RAM besar; model kecil kurang akurat.
+
 - **Aplikasi Gemini + Shizuku (tanpa API, default)**: screenshot diambil lewat Shizuku, dibagikan ke aplikasi
   Gemini di HP, tombol Kirim ditekan otomatis bila perlu, lalu teks jawabannya dibaca dari layar aplikasi
   Gemini dan ditampilkan di panel. Ini mengotomasi antarmuka aplikasi Gemini, jadi bisa rusak bila
